@@ -1,0 +1,10 @@
+data/
+*.pyc
+__pycache__/
+.env
+*.egg-info/
+dist/
+.pytest_cache/
+mlruns/
+*.pkl
+*.joblib
