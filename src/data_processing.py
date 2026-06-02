@@ -251,43 +251,6 @@ def build_processed_dataset(
 
 # ---------------------------------------------------------------------------
 # Pipeline factories
-# Step 5 – RFM proxy target label (used before pipeline, not inside it)
-# ---------------------------------------------------------------------------
-def build_rfm_target(df: pd.DataFrame, snapshot_date: str = None) -> pd.DataFrame:
-    """
-    Computes RFM scores per customer and assigns a binary proxy default label.
-    Low RFM score (bottom tertile) => high risk => target = 1.
-
-    Returns a DataFrame with [CustomerId, target].
-    """
-    snapshot = pd.Timestamp(snapshot_date, tz="UTC") if snapshot_date else (
-        pd.to_datetime(df["TransactionStartTime"], utc=True).max()
-    )
-
-    df = df.copy()
-    df["_dt"] = pd.to_datetime(df["TransactionStartTime"], utc=True)
-
-    rfm = df.groupby("CustomerId").agg(
-        recency=("_dt", lambda x: (snapshot - x.max()).days),
-        frequency=("TransactionId", "count"),
-        monetary=("Amount", "sum"),
-    ).reset_index()
-
-    # Score each dimension 1–3 (1 = best for frequency/monetary, worst recency)
-    rfm["r_score"] = pd.qcut(rfm["recency"], q=3, labels=[3, 2, 1]).astype(int)
-    rfm["f_score"] = pd.qcut(rfm["frequency"].rank(method="first"), q=3, labels=[1, 2, 3]).astype(int)
-    rfm["m_score"] = pd.qcut(rfm["monetary"].rank(method="first"), q=3, labels=[1, 2, 3]).astype(int)
-    rfm["rfm_score"] = rfm["r_score"] + rfm["f_score"] + rfm["m_score"]
-
-    # Bottom tertile of RFM score => high risk (proxy default = 1)
-    threshold = rfm["rfm_score"].quantile(1 / 3)
-    rfm["target"] = (rfm["rfm_score"] <= threshold).astype(int)
-
-    return rfm[["CustomerId", "rfm_score", "target"]]
-
-
-# ---------------------------------------------------------------------------
-# Pipeline factory
 # ---------------------------------------------------------------------------
 CATEGORICAL_COLS = ["ProductCategory", "ChannelId", "ProviderId", "ProductId", "CurrencyCode"]
 NUMERICAL_COLS = [
