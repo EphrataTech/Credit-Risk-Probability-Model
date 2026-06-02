@@ -1,6 +1,10 @@
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.dummy import DummyClassifier
+from sklearn.neighbors import KNeighborsClassifier
+
+from src.train import evaluate, RANDOM_STATE
 from src.data_processing import (
     AggregateFeatures,
     DatetimeFeatures,
@@ -212,3 +216,40 @@ def test_pipeline_runs_without_error(sample_df):
     assert "tx_hour" in out.columns
     assert "total_amount" in out.columns
     assert "CustomerId" not in out.columns
+
+
+# ---------------------------------------------------------------------------
+# Tests for src/train.py helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def classification_data():
+    """Small binary classification dataset for train.py helper tests."""
+    np.random.seed(RANDOM_STATE)
+    X = pd.DataFrame({"a": np.random.randn(100), "b": np.random.randn(100)})
+    y = pd.Series(np.random.randint(0, 2, 100))
+    return X, y
+
+
+def test_evaluate_returns_all_metrics(classification_data):
+    X, y = classification_data
+    clf = DummyClassifier(strategy="most_frequent").fit(X, y)
+    metrics = evaluate(clf, X, y)
+    assert set(metrics.keys()) == {"accuracy", "precision", "recall", "f1", "roc_auc"}
+
+
+def test_evaluate_metrics_in_range(classification_data):
+    X, y = classification_data
+    clf = DummyClassifier(strategy="stratified", random_state=RANDOM_STATE).fit(X, y)
+    metrics = evaluate(clf, X, y)
+    for name, val in metrics.items():
+        assert 0.0 <= val <= 1.0, f"{name}={val} out of [0, 1]"
+
+
+def test_evaluate_perfect_classifier(classification_data):
+    X, y = classification_data
+    clf = KNeighborsClassifier(n_neighbors=1).fit(X, y)
+    metrics = evaluate(clf, X, y)
+    assert metrics["accuracy"] == 1.0
+    assert metrics["roc_auc"] == 1.0

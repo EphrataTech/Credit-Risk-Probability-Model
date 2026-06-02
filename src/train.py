@@ -3,7 +3,6 @@ import os
 
 import mlflow
 import mlflow.sklearn
-import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -18,6 +17,8 @@ from sklearn.model_selection import RandomizedSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 
 from src.data_processing import (
+    build_column_transformer,
+    build_preprocessing_pipeline,
     CATEGORICAL_COLS,
     NUMERICAL_COLS,
     build_column_transformer,

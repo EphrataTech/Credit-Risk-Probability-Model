@@ -9,4 +9,5 @@ pydantic
 mlflow
 pytest
 httpx
+flake8
 scotch
