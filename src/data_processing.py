@@ -5,10 +5,11 @@ from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
+from sklearn.cluster import KMeans
 
 
 # ---------------------------------------------------------------------------
-# Step 1 – Aggregate features (customer-level RFM + stats)
+# Step 1 – Aggregate features (customer-level stats)
 # ---------------------------------------------------------------------------
 class AggregateFeatures(BaseEstimator, TransformerMixin):
     """Computes per-customer aggregate features and merges back onto transactions."""
@@ -73,7 +74,7 @@ class WoEEncoder(BaseEstimator, TransformerMixin):
     Columns with IV < min_iv are dropped as uninformative.
     """
 
-    def __init__(self, cat_cols: list[str], target_col: str = "target", min_iv: float = 0.02):
+    def __init__(self, cat_cols: list[str], target_col: str = "is_high_risk", min_iv: float = 0.02):
         self.cat_cols = cat_cols
         self.target_col = target_col
         self.min_iv = min_iv
@@ -115,7 +116,6 @@ class WoEEncoder(BaseEstimator, TransformerMixin):
         X = X.copy()
         for col in self.useful_cols_:
             X[f"{col}_woe"] = X[col].map(self.woe_maps_[col]).fillna(0.0)
-        # Drop original categorical columns that were encoded
         return X.drop(columns=[c for c in self.cat_cols if c in X.columns])
 
     def get_iv_summary(self) -> pd.DataFrame:
@@ -131,6 +131,126 @@ class WoEEncoder(BaseEstimator, TransformerMixin):
 
 
 # ---------------------------------------------------------------------------
+# Step 5 – RFM computation + K-Means clustering → is_high_risk label
+# ---------------------------------------------------------------------------
+def build_rfm_features(df: pd.DataFrame, snapshot_date: str = None) -> pd.DataFrame:
+    """
+    Computes Recency, Frequency, Monetary values per customer.
+
+    Args:
+        df: raw transaction DataFrame
+        snapshot_date: ISO date string used as the 'today' reference for recency.
+                       Defaults to the latest transaction date in the dataset.
+
+    Returns:
+        DataFrame with columns [CustomerId, recency, frequency, monetary]
+    """
+    snapshot = (
+        pd.Timestamp(snapshot_date, tz="UTC")
+        if snapshot_date
+        else pd.to_datetime(df["TransactionStartTime"], utc=True).max()
+    )
+    df = df.copy()
+    df["_dt"] = pd.to_datetime(df["TransactionStartTime"], utc=True)
+
+    rfm = (
+        df.groupby("CustomerId")
+        .agg(
+            recency=("_dt", lambda x: (snapshot - x.max()).days),
+            frequency=("TransactionId", "count"),
+            monetary=("Amount", "sum"),
+        )
+        .reset_index()
+    )
+    return rfm
+
+
+def assign_rfm_clusters(rfm: pd.DataFrame, n_clusters: int = 3, random_state: int = 42) -> pd.DataFrame:
+    """
+    Scales RFM features and runs K-Means to segment customers.
+    Identifies the high-risk cluster (lowest frequency + lowest monetary)
+    and assigns is_high_risk = 1 to those customers.
+
+    Args:
+        rfm: DataFrame with [CustomerId, recency, frequency, monetary]
+        n_clusters: number of K-Means clusters (default 3)
+        random_state: for reproducibility
+
+    Returns:
+        rfm DataFrame with additional columns: cluster, is_high_risk
+    """
+    rfm = rfm.copy()
+    scaler = StandardScaler()
+    rfm_scaled = scaler.fit_transform(rfm[["recency", "frequency", "monetary"]])
+
+    kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init="auto")
+    rfm["cluster"] = kmeans.fit_predict(rfm_scaled)
+
+    # Identify high-risk cluster: highest recency (most days since last tx),
+    # lowest frequency, lowest monetary — sum of scaled centroids determines rank
+    centers = pd.DataFrame(
+        kmeans.cluster_centers_,
+        columns=["recency", "frequency", "monetary"],
+    )
+    # High risk = high recency score + low frequency + low monetary
+    # Score: recency - frequency - monetary (higher = more disengaged)
+    centers["risk_score"] = centers["recency"] - centers["frequency"] - centers["monetary"]
+    high_risk_cluster = int(centers["risk_score"].idxmax())
+
+    rfm["is_high_risk"] = (rfm["cluster"] == high_risk_cluster).astype(int)
+    return rfm
+
+
+def build_rfm_target(df: pd.DataFrame, snapshot_date: str = None) -> pd.DataFrame:
+    """
+    Convenience wrapper: computes RFM and returns [CustomerId, is_high_risk].
+    """
+    rfm = build_rfm_features(df, snapshot_date)
+    rfm = assign_rfm_clusters(rfm)
+    return rfm[["CustomerId", "is_high_risk"]]
+
+
+# ---------------------------------------------------------------------------
+# Step 6 – Full processed dataset builder (writes to data/processed/)
+# ---------------------------------------------------------------------------
+def build_processed_dataset(
+    raw_path: str,
+    output_path: str,
+    snapshot_date: str = None,
+) -> pd.DataFrame:
+    """
+    Reads raw transactions, engineers all features, attaches the is_high_risk
+    target, and saves the result as a CSV.
+
+    Args:
+        raw_path:     path to raw transactions CSV
+        output_path:  path to write the processed CSV
+        snapshot_date: optional ISO date for recency calculation
+
+    Returns:
+        Processed DataFrame
+    """
+    df = pd.read_csv(raw_path)
+
+    # Build and merge RFM target
+    target = build_rfm_target(df, snapshot_date)
+    df = df.merge(target, on="CustomerId", how="left")
+
+    # Run preprocessing pipeline (aggregates, datetime, drop IDs)
+    pipe = build_preprocessing_pipeline()
+    processed = pipe.fit_transform(df)
+
+    # Carry is_high_risk through (it was on df before drop_ids removed CustomerId)
+    # Re-attach from the merged df using index alignment
+    processed["is_high_risk"] = df["is_high_risk"].values
+
+    processed.to_csv(output_path, index=False)
+    print(f"Saved processed dataset to {output_path}  shape={processed.shape}")
+    return processed
+
+
+# ---------------------------------------------------------------------------
+# Pipeline factories
 # Step 5 – RFM proxy target label (used before pipeline, not inside it)
 # ---------------------------------------------------------------------------
 def build_rfm_target(df: pd.DataFrame, snapshot_date: str = None) -> pd.DataFrame:
@@ -178,13 +298,6 @@ NUMERICAL_COLS = [
 
 
 def build_preprocessing_pipeline() -> Pipeline:
-    """
-    Returns a sklearn Pipeline that:
-      1. Aggregates customer-level features
-      2. Extracts datetime components
-      3. Drops ID columns
-    The returned pipeline outputs a DataFrame ready for WoE encoding + ColumnTransformer.
-    """
     return Pipeline([
         ("aggregate", AggregateFeatures()),
         ("datetime",  DatetimeFeatures()),
@@ -193,10 +306,6 @@ def build_preprocessing_pipeline() -> Pipeline:
 
 
 def build_column_transformer() -> ColumnTransformer:
-    """
-    Numeric: median imputation → StandardScaler
-    Categorical: constant imputation → OneHotEncoder
-    """
     numeric = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler",  StandardScaler()),
@@ -212,3 +321,13 @@ def build_column_transformer() -> ColumnTransformer:
         ],
         remainder="drop",
     )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import sys
+    raw = sys.argv[1] if len(sys.argv) > 1 else "data/raw/data.csv"
+    out = sys.argv[2] if len(sys.argv) > 2 else "data/processed/processed.csv"
+    build_processed_dataset(raw, out)
