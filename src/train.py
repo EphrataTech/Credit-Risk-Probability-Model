@@ -19,6 +19,11 @@ from sklearn.pipeline import Pipeline
 from src.data_processing import (
     build_column_transformer,
     build_preprocessing_pipeline,
+    CATEGORICAL_COLS,
+    NUMERICAL_COLS,
+    build_column_transformer,
+    build_preprocessing_pipeline,
+    build_rfm_target,
 )
 
 EXPERIMENT_NAME = "credit-risk-model"

@@ -165,9 +165,7 @@ def build_rfm_features(df: pd.DataFrame, snapshot_date: str = None) -> pd.DataFr
     return rfm
 
 
-def assign_rfm_clusters(
-    rfm: pd.DataFrame, n_clusters: int = 3, random_state: int = 42
-) -> pd.DataFrame:
+def assign_rfm_clusters(rfm: pd.DataFrame, n_clusters: int = 3, random_state: int = 42) -> pd.DataFrame:
     """
     Scales RFM features and runs K-Means to segment customers.
     Identifies the high-risk cluster (lowest frequency + lowest monetary)
