@@ -1,6 +1,11 @@
 from pydantic import BaseModel, Field
 
 
+class FeatureContribution(BaseModel):
+    feature: str
+    shap_value: float
+
+
 class TransactionFeatures(BaseModel):
     """Input features for a single customer's latest transaction."""
 
@@ -18,7 +23,7 @@ class TransactionFeatures(BaseModel):
     Amount: float
     Value: float
     TransactionStartTime: str = Field(
-        ..., example="2024-01-15T08:30:00Z"
+        ..., examples=["2024-01-15T08:30:00Z"]
     )
     PricingStrategy: int
     FraudResult: int = Field(0, ge=0, le=1)
@@ -51,3 +56,10 @@ class PredictionResponse(BaseModel):
     customer_id: str
     risk_probability: float = Field(..., ge=0.0, le=1.0)
     is_high_risk: bool
+
+
+class ExplainResponse(BaseModel):
+    customer_id: str
+    risk_probability: float = Field(..., ge=0.0, le=1.0)
+    base_value: float
+    feature_contributions: list[FeatureContribution]

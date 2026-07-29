@@ -10,4 +10,6 @@ mlflow
 pytest
 httpx
 flake8
-scotch
+streamlit
+shap
+matplotlib

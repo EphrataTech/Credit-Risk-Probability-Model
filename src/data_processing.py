@@ -1,11 +1,22 @@
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
 from sklearn.cluster import KMeans
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+from src.constants import (
+    CATEGORICAL_COLS,
+    DEFAULT_MIN_IV,
+    DEFAULT_N_CLUSTERS,
+    ID_COLS,
+    IV_BINS,
+    IV_LABELS,
+    NUMERICAL_COLS,
+    TARGET_COL,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -55,13 +66,13 @@ class DatetimeFeatures(BaseEstimator, TransformerMixin):
 # Step 3 – Drop ID columns not useful for modeling
 # ---------------------------------------------------------------------------
 class DropIDColumns(BaseEstimator, TransformerMixin):
-    ID_COLS = ["TransactionId", "BatchId", "AccountId", "SubscriptionId", "CustomerId"]
+    """Removes identifier columns that should not be used as model features."""
 
     def fit(self, X, y=None):
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        return X.drop(columns=[c for c in self.ID_COLS if c in X.columns])
+        return X.drop(columns=[c for c in ID_COLS if c in X.columns])
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +85,12 @@ class WoEEncoder(BaseEstimator, TransformerMixin):
     Columns with IV < min_iv are dropped as uninformative.
     """
 
-    def __init__(self, cat_cols: list[str], target_col: str = "is_high_risk", min_iv: float = 0.02):
+    def __init__(
+        self,
+        cat_cols: list[str],
+        target_col: str = TARGET_COL,
+        min_iv: float = DEFAULT_MIN_IV,
+    ):
         self.cat_cols = cat_cols
         self.target_col = target_col
         self.min_iv = min_iv
@@ -124,8 +140,8 @@ class WoEEncoder(BaseEstimator, TransformerMixin):
             .sort_values("IV", ascending=False)
             .assign(strength=lambda d: pd.cut(
                 d["IV"],
-                bins=[-np.inf, 0.02, 0.1, 0.3, 0.5, np.inf],
-                labels=["Useless", "Weak", "Medium", "Strong", "Suspicious"],
+                bins=IV_BINS,
+                labels=IV_LABELS,
             ))
         )
 
@@ -165,7 +181,11 @@ def build_rfm_features(df: pd.DataFrame, snapshot_date: str = None) -> pd.DataFr
     return rfm
 
 
-def assign_rfm_clusters(rfm: pd.DataFrame, n_clusters: int = 3, random_state: int = 42) -> pd.DataFrame:
+def assign_rfm_clusters(
+    rfm: pd.DataFrame,
+    n_clusters: int = DEFAULT_N_CLUSTERS,
+    random_state: int = 42,
+) -> pd.DataFrame:
     """
     Scales RFM features and runs K-Means to segment customers.
     Identifies the high-risk cluster (lowest frequency + lowest monetary)
@@ -249,17 +269,12 @@ def build_processed_dataset(
     return processed
 
 
+from src.constants import CATEGORICAL_COLS, NUMERICAL_COLS  # re-export for backward compatibility
+
+
 # ---------------------------------------------------------------------------
 # Pipeline factories
 # ---------------------------------------------------------------------------
-CATEGORICAL_COLS = ["ProductCategory", "ChannelId", "ProviderId", "ProductId", "CurrencyCode"]
-NUMERICAL_COLS = [
-    "Amount", "Value", "PricingStrategy", "FraudResult",
-    "total_amount", "avg_amount", "transaction_count", "std_amount",
-    "tx_hour", "tx_day", "tx_month", "tx_year",
-]
-
-
 def build_preprocessing_pipeline() -> Pipeline:
     return Pipeline([
         ("aggregate", AggregateFeatures()),
